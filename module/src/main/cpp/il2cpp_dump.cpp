@@ -16,6 +16,7 @@
 #include "log.h"
 #include "il2cpp-tabledefs.h"
 #include "il2cpp-class.h"
+#include <elf.h>
 
 #define DO_API(r, n, p) r (*n) p
 
@@ -24,6 +25,37 @@
 #undef DO_API
 
 static uint64_t il2cpp_base = 0;
+
+struct ElfInfo {
+    Elf64_Ehdr* ehdr;
+    Elf64_Phdr* phdrs;
+    int phnum;
+};
+
+static ElfInfo g_elf{};
+
+static void init_elf() {
+    g_elf.ehdr = (Elf64_Ehdr*)il2cpp_base;
+    g_elf.phdrs = (Elf64_Phdr*)(il2cpp_base + g_elf.ehdr->e_phoff);
+    g_elf.phnum = g_elf.ehdr->e_phnum;
+}
+
+static uint64_t rva_to_offset(uint64_t rva) {
+    for (int i = 0; i < g_elf.phnum; i++) {
+        Elf64_Phdr& ph = g_elf.phdrs[i];
+
+        if (ph.p_type != PT_LOAD)
+            continue;
+
+        uint64_t start = ph.p_vaddr;
+        uint64_t end   = ph.p_vaddr + ph.p_memsz;
+
+        if (rva >= start && rva < end) {
+            return rva - ph.p_vaddr + ph.p_offset;
+        }
+    }
+    return 0;
+}
 
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \
@@ -99,10 +131,13 @@ std::string dump_method(Il2CppClass *klass) {
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
         if (method->methodPointer) {
-            outPut << "\t// RVA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer - il2cpp_base;
-            outPut << " VA: 0x";
-            outPut << std::hex << (uint64_t) method->methodPointer;
+            uint64_t methodVA = (uint64_t) method->methodPointer;
+            uint64_t rva = methodVA - il2cpp_base;
+            uint64_t offset = rva_to_offset(rva);
+
+            outPut << "\t// RVA: 0x" << std::hex << rva
+                   << " Offset: 0x" << offset
+                   << " VA: 0x" << methodVA;
         } else {
             outPut << "\t// RVA: 0x VA: 0x0";
         }
@@ -149,7 +184,7 @@ std::string dump_method(Il2CppClass *klass) {
         if (param_count > 0) {
             outPut.seekp(-2, outPut.cur);
         }
-        outPut << ") { }\n";
+        outPut << ") { }\n\n";
         //TODO GenericInstMethod
     }
     return outPut.str();
@@ -329,6 +364,7 @@ void il2cpp_api_init(void *handle) {
         Dl_info dlInfo;
         if (dladdr((void *) il2cpp_domain_get_assemblies, &dlInfo)) {
             il2cpp_base = reinterpret_cast<uint64_t>(dlInfo.dli_fbase);
+            init_elf();
         }
         LOGI("il2cpp_base: %" PRIx64"", il2cpp_base);
     } else {

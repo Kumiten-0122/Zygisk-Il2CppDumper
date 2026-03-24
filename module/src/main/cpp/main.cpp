@@ -6,6 +6,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <cinttypes>
+
+#include <sstream>   // ★追加
+#include <string>    // ★追加
+
 #include "hack.h"
 #include "zygisk.hpp"
 #include "game.h"
@@ -25,7 +29,9 @@ public:
     void preAppSpecialize(AppSpecializeArgs *args) override {
         auto package_name = env->GetStringUTFChars(args->nice_name, nullptr);
         auto app_data_dir = env->GetStringUTFChars(args->app_data_dir, nullptr);
+
         preSpecialize(package_name, app_data_dir);
+
         env->ReleaseStringUTFChars(args->nice_name, package_name);
         env->ReleaseStringUTFChars(args->app_data_dir, app_data_dir);
     }
@@ -40,15 +46,36 @@ public:
 private:
     Api *api;
     JNIEnv *env;
-    bool enable_hack;
-    char *game_data_dir;
-    void *data;
-    size_t length;
+    bool enable_hack = false;
+    char *game_data_dir = nullptr;
+    void *data = nullptr;
+    size_t length = 0;
+
+    // ===== 複数パッケージ対応 =====
+    bool match_package(const char* package_name) {
+        std::string patterns = GamePackageName;
+        std::stringstream ss(patterns);
+        std::string item;
+
+        while (std::getline(ss, item, ',')) {
+            if (item == package_name) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // =========================================
 
     void preSpecialize(const char *package_name, const char *app_data_dir) {
-        if (strcmp(package_name, GamePackageName) == 0) {
+
+        // ===== ここを変更 =====
+        if (match_package(package_name)) {
+        // ======================
+
             LOGI("detect game: %s", package_name);
+
             enable_hack = true;
+
             game_data_dir = new char[strlen(app_data_dir) + 1];
             strcpy(game_data_dir, app_data_dir);
 
